@@ -14,3 +14,7 @@ train = { path = "train.py", model = ["config", "seq"], params = { config = "con
 # in different ways. Small on purpose, to run on 4 GPUs of any kind for minutes.
 # `case` is layouts, single or async; matrix.py's docstring says what each asks.
 matrix = { path = "matrix.py", params = { case = "layouts" } }
+
+# GPU-211: the same toy model as an ordinary Ravex script, for a cluster of nodes
+# with one GPU each. `pace` slows a step down so there is time to take a node away.
+cluster = { path = "cluster.py", params = { steps = 600, pace = 0.05 } }

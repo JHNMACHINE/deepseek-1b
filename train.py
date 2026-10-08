@@ -172,6 +172,21 @@ def main() -> None:
             last = now
             done = ravex.step()
             if done % args.eval_every == 0 or done == args.steps:
+                # Tensors are logged as histograms (Ravex bins any value with
+                # more than one element). Taken before the eval, whose own
+                # forward would overwrite the gates' loads with its batches':
+                # how each expert's share compares with the mean, the bias the
+                # balancing has pushed each one by, and the two largest
+                # matrices, the embedding and the head.
+                gates = list(model.gates())
+                ravex.log_metrics(
+                    {
+                        "moe/expert_load": torch.cat([g.load / g.load.mean().clamp_min(1e-9) for g in gates]),
+                        "moe/gate_bias": torch.cat([g.bias.detach().flatten() for g in gates]),
+                        "weights/embed": model.embed.weight.detach(),
+                        "weights/head": model.head.weight.detach(),
+                    }
+                )
                 model.eval()
                 with torch.no_grad():
                     losses = []

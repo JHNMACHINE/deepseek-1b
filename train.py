@@ -29,13 +29,36 @@ import torch
 import torch.nn.functional as F
 
 import ravex
-from model import ModelArgs, Transformer, count_parameters
+from model import ModelArgs, MoE, Transformer, count_parameters
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def tokens(data: str, split: str) -> np.ndarray:
     return np.memmap(os.path.join(data, split + ".bin"), dtype="<u4", mode="r")
+
+
+def compile_static_parts(model: Transformer) -> None:
+    """``torch.compile`` what has the same shapes at every step.
+
+    Attention, the norms, the dense layer's MLP and each MoE layer's shared
+    experts see ``(batch, seq, dim)`` every time, so Inductor compiles them
+    once and generates Triton kernels for them on a GPU. The routed experts do
+    not: how many tokens each one gets changes at every step, and the loop
+    over them reads the counts back (``tolist``), which would break the graph
+    and recompile until torch gave up. They stay eager.
+
+    ``Module.compile`` works in place: the state dict keeps its keys, so
+    checkpoints from a run without ``--compile`` resume with it and back.
+    """
+    for block in model.layers:
+        block.attn.compile()
+        block.attn_norm.compile()
+        block.ffn_norm.compile()
+        if isinstance(block.ffn, MoE):
+            block.ffn.shared_experts.compile()
+        else:
+            block.ffn.compile()
 
 
 def main() -> None:
@@ -102,7 +125,9 @@ def main() -> None:
         )
         schedule = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda s: lr_at(s) / args.lr)
         ravex.track(model=model, optimizer=optimizer, scheduler=schedule)
-        forward = torch.compile(model) if args.compile else model
+        if args.compile:
+            compile_static_parts(model)
+        forward = model
 
         counted = count_parameters(model_args)
         print(

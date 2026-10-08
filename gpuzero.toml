@@ -4,5 +4,8 @@
 #
 # The defaults are a short run on one 80 GB GPU: 2000 steps of 65,536 tokens,
 # about 131M tokens, on 200M tokens of FineWeb-Edu prepared on the node.
+# `compile` compiles the parts with fixed shapes (train.py says which): it is
+# not in `model`, so a run can turn it on or off from one checkpoint to the
+# next, and it leaves Inductor and Triton kernels for the node's cache.
 [scripts]
-train = { path = "train.py", model = ["config", "seq"], params = { config = "configs/1b.json", steps = 2000, batch = 8, accum = 4, lr = 6e-4, warmup = 200, eval-every = 200, data-tokens = 200000000 } }
+train = { path = "train.py", model = ["config", "seq"], params = { config = "configs/1b.json", steps = 2000, batch = 8, accum = 4, lr = 6e-4, warmup = 200, eval-every = 200, data-tokens = 200000000, compile = true } }

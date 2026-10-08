@@ -35,8 +35,13 @@ RAVEX_STORAGE_PATH=runs/tiny python train.py --config configs/tiny.json \
   --batch 4 --accum 1 --seq 128 --lr 3e-3 --warmup 20 --steps 300
 ```
 
+`--compile` runs `torch.compile` on what has the same shapes at every step -
+attention, norms, the dense and shared MLPs - and leaves the routed experts
+eager, since how many tokens each gets changes every step. Losses are the same
+as without it, and a checkpoint resumes either way.
+
 `gpuzero.toml` declares the scripts an agent may start, with their default
-parameters.
+parameters; `compile` is on there.
 
 ## License
 

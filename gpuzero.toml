@@ -9,3 +9,8 @@
 # next, and it leaves Inductor and Triton kernels for the node's cache.
 [scripts]
 train = { path = "train.py", model = ["config", "seq"], params = { config = "configs/1b.json", steps = 2000, batch = 8, accum = 4, lr = 6e-4, warmup = 200, eval-every = 200, data-tokens = 200000000, compile = true } }
+
+# GPU-211: what torch.distributed.checkpoint does with a training state sharded
+# in different ways. Small on purpose, to run on 4 GPUs of any kind for minutes.
+# `case` is layouts, single or async; matrix.py's docstring says what each asks.
+matrix = { path = "matrix.py", params = { case = "layouts" } }

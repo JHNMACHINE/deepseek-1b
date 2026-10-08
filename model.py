@@ -27,6 +27,14 @@ so that it trains:
   autograd never has to reason about a tensor it saved being overwritten.
 * **Initialisation**: every weight from a normal with std 0.006, as the V3
   report says; the original leaves them empty for a checkpoint to fill.
+* **RoPE in real arithmetic.** The original rotates with complex numbers
+  (``torch.polar``, ``view_as_complex``); Inductor compiles no complex
+  operator and ran that piece eagerly, splitting the attention graph. Here
+  the same rotation is written with its cosines and sines, and the buffer
+  holds them as reals.
+* **RMSNorm in float32.** Under autocast its input arrives in bf16 while the
+  weight is float32, and torch then refuses the fused kernel for the slow
+  one; the norm is taken in float32 and handed back in the input's dtype.
 
 Not here (yet): Multi-Token Prediction, and V3's tiny sequence-wise balance
 loss.
@@ -98,8 +106,10 @@ class ModelArgs:
 
 
 def precompute_freqs_cis(args: ModelArgs) -> torch.Tensor:
-    """Rotary frequencies as complex numbers, with YaRN's correction when the
-    model is longer than ``original_seq_len`` (unchanged from DeepSeek's)."""
+    """Rotary frequencies, with YaRN's correction when the model is longer
+    than ``original_seq_len`` (unchanged from DeepSeek's), as
+    ``(seq, rope_dim / 2, 2)`` reals: the cosine and sine of each angle -
+    DeepSeek's complex numbers, as ``view_as_real`` would lay them out."""
     dim = args.qk_rope_head_dim
     seqlen = args.max_seq_len
     base = args.rope_theta
@@ -126,14 +136,19 @@ def precompute_freqs_cis(args: ModelArgs) -> torch.Tensor:
         freqs = freqs / factor * (1 - smooth) + freqs * smooth
     t = torch.arange(seqlen)
     freqs = torch.outer(t, freqs)
-    return torch.polar(torch.ones_like(freqs), freqs)
+    return torch.stack((torch.cos(freqs), torch.sin(freqs)), dim=-1)
 
 
 def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    """Rotate each pair of ``x``'s last dimension by its angle: the complex
+    product ``(a + ib)(cos + i sin)`` of the original, written out in reals so
+    that Inductor compiles it."""
     dtype = x.dtype
-    x = torch.view_as_complex(x.float().view(*x.shape[:-1], -1, 2))
-    freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-    y = torch.view_as_real(x * freqs_cis).flatten(3)
+    pairs = x.float().view(*x.shape[:-1], -1, 2)
+    angles = freqs_cis.view(1, pairs.size(1), 1, pairs.size(-2), 2)
+    cos, sin = angles[..., 0], angles[..., 1]
+    a, b = pairs[..., 0], pairs[..., 1]
+    y = torch.stack((a * cos - b * sin, a * sin + b * cos), dim=-1).flatten(3)
     return y.to(dtype)
 
 
@@ -145,7 +160,7 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.rms_norm(x, (self.dim,), self.weight, self.eps)
+        return F.rms_norm(x.float(), (self.dim,), self.weight, self.eps).type_as(x)
 
 
 class MLA(nn.Module):

@@ -25,9 +25,3 @@ cachetest = { path = "cachetest.py" }
 
 # GPU-181: how long torch.compile takes with the workspace's cache and without.
 compiletest = { path = "compiletest.py", params = { layers = 6, steps = 20 } }
-
-# GPU-181, for the measurement only: two runs of compiletest on the same kind of
-# GPU, so the second has the same cache key as the first. Removed afterwards.
-[compute]
-gpus = ["a40-48gb"]
-interruptible = false

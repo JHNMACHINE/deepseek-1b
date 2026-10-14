@@ -22,3 +22,12 @@ cluster = { path = "cluster.py", params = { steps = 600, pace = 0.05 } }
 # GPU-200: what a node may do with the platform's cache, through URLs the backend
 # signs: cachetest.py's docstring lists the checks. No parameters.
 cachetest = { path = "cachetest.py" }
+
+# GPU-181: how long torch.compile takes with the workspace's cache and without.
+compiletest = { path = "compiletest.py", params = { layers = 6, steps = 20 } }
+
+# GPU-181, for the measurement only: two runs of compiletest on the same kind of
+# GPU, so the second has the same cache key as the first. Removed afterwards.
+[compute]
+gpus = ["a40-48gb"]
+interruptible = false

@@ -13,6 +13,8 @@ one ``CHECK`` line per thing it tried and a ``VERDICT`` at the end:
   same, and a listing finds them;
 * a put in ``global/`` is refused, and so is a path that climbs out with ``..``;
 * a signed put takes no more bytes than it was signed for (GPU-218);
+* the run's own keys (``RAVEX_S3_*``, R2's temporary ones for the workspace's
+  bucket, GPU-217) list that bucket and are refused by ``gpuzero-cache``;
 * ``ravex cache push`` and ``pull`` reach the cache through ``sign+https://``,
   and a push to ``global`` fails.
 
@@ -113,14 +115,74 @@ def route() -> None:
     status, answer = ask("global", "put", probe, len(data))
     check("global put is refused", status == 403, "%d %s" % (status, answer.get("detail", "")))
 
-    status, answer = ask("global", "list", "")
-    check("global listing is allowed", status == 200, "%d, %d paths" % (status, len(answer.get("paths", []))))
+    # A prefix, not "": the backend refuses an empty path in every scope.
+    status, answer = ask("global", "list", "probe/")
+    check("global listing is allowed", status == 200,
+          "%d %s" % (status, answer.get("detail", "%d paths" % len(answer.get("paths", [])))))
 
     status, answer = ask("workspace", "put", "../1/escape.bin", 4)
     check("a path with .. is refused", status == 403, "%d %s" % (status, answer.get("detail", "")))
 
     status, answer = ask("ws", "list", "")
     check("a scope other than global and workspace is refused", status >= 400, str(status))
+
+
+def listing(bucket: str, prefix: str) -> int:
+    """The status of a ListObjectsV2 on ``bucket``, signed with the run's keys.
+
+    A SigV4 of a few lines and not a library: the training's environment has
+    no boto3, and this only has to tell 200 from 403."""
+    import datetime
+    import hashlib
+    import hmac
+    import urllib.parse
+
+    endpoint = os.environ["RAVEX_STORAGE_ENDPOINT"].rstrip("/")
+    region = os.environ.get("RAVEX_STORAGE_REGION") or "auto"
+    host = urllib.parse.urlparse(endpoint).netloc
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stamp, day = now.strftime("%Y%m%dT%H%M%SZ"), now.strftime("%Y%m%d")
+    query = urllib.parse.urlencode(sorted({"list-type": "2", "max-keys": "1", "prefix": prefix}.items()),
+                                   quote_via=urllib.parse.quote, safe="")
+    headers = {"host": host, "x-amz-content-sha256": hashlib.sha256(b"").hexdigest(), "x-amz-date": stamp}
+    if os.environ.get("RAVEX_S3_SESSION_TOKEN"):
+        headers["x-amz-security-token"] = os.environ["RAVEX_S3_SESSION_TOKEN"]
+    names = ";".join(sorted(headers))
+    canonical = "\n".join(["GET", "/" + bucket, query, "".join("%s:%s\n" % (k, headers[k]) for k in sorted(headers)),
+                           names, headers["x-amz-content-sha256"]])
+    scope = "%s/%s/s3/aws4_request" % (day, region)
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", stamp, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    key = ("AWS4" + os.environ["RAVEX_S3_SECRET_KEY"]).encode()
+    for part in (day, region, "s3", "aws4_request"):
+        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    headers["Authorization"] = "AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s" % (
+        os.environ["RAVEX_S3_ACCESS_KEY"], scope, names, signature)
+    del headers["host"]
+    status, _ = transfer_with(endpoint + "/" + bucket + "?" + query, headers)
+    return status
+
+
+def transfer_with(url: str, headers: dict) -> tuple[int, bytes]:
+    request = urllib.request.Request(url, headers=dict(headers, **{"User-Agent": "ravex"}))
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()[:200]
+
+
+def run_keys() -> None:
+    # The run's keys are R2's temporary ones for the workspace's own bucket
+    # (GPU-217): they must open that bucket and not the cache's.
+    if not (os.environ.get("RAVEX_S3_ACCESS_KEY") and os.environ.get("RAVEX_STORAGE_ENDPOINT")):
+        print("no run keys in the environment: nothing to try", flush=True)
+        return
+    own = os.environ.get("RAVEX_STORAGE_BUCKET", "")
+    status = listing(own, os.environ.get("RAVEX_STORAGE_PREFIX", ""))
+    check("the run's keys list the workspace's own bucket", status == 200, "%s: %d" % (own, status))
+    status = listing("gpuzero-cache", "")
+    check("the run's keys do not open gpuzero-cache", status in (401, 403), str(status))
 
 
 def ravex_cache() -> None:
@@ -165,6 +227,7 @@ def main() -> None:
             sys.exit(1)
     environment()
     route()
+    run_keys()
     ravex_cache()
     compile_something()
     print("VERDICT %s%s" % ("FAIL - " if FAILED else "ok", ", ".join(FAILED)), flush=True)

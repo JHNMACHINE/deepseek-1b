@@ -18,3 +18,7 @@ matrix = { path = "matrix.py", params = { case = "layouts" } }
 # GPU-211: the same toy model as an ordinary Ravex script, for a cluster of nodes
 # with one GPU each. `pace` slows a step down so there is time to take a node away.
 cluster = { path = "cluster.py", params = { steps = 600, pace = 0.05 } }
+
+# GPU-200: what a node may do with the platform's cache, through URLs the backend
+# signs: cachetest.py's docstring lists the checks. No parameters.
+cachetest = { path = "cachetest.py" }

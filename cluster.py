@@ -12,11 +12,12 @@ that averages them is something that can be seen. Every ``--report-every``
 steps each node prints one ``RESULT`` line: the step, the loss and a checksum
 of the weights. Between rounds the checksums differ.
 
-**A round is seen where it happens.** Ravex closes it inside
-``ravex.batch_boundary()``, at the top of the next step, so a ``step`` line
-is always the weights before it. The script compares the checksum across that
-call, and when the weights changed under it - nothing else replaces them - it
-prints a ``round`` line with the checksum after: every node's must be the
+**A round is seen where it happens.** Ravex closes it at the top of the next
+step, which it takes from the model's first forward after the step that made
+the round due - before that forward runs - so a ``step`` line is always the
+weights before it. The script compares the checksum across that forward, and
+when the weights changed under it - nothing else replaces them - it prints a
+``round`` line with the checksum after: every node's must be the
 same number, which is what shows the round averaged them. The first run on
 two machines printed only ``step`` lines, before the round and ten steps
 after, and so could not show that (GPU-211). A node that was killed and came back shows up as a line
@@ -74,22 +75,23 @@ def main() -> None:
             "ravex_env": sorted(k for k in os.environ if k.startswith("RAVEX_")),
         }), flush=True)
 
-        last = None
         while ravex.step() < args.steps:
-            ravex.batch_boundary()
             step = ravex.step()
+            generator = torch.Generator().manual_seed(salt + step)
+            x = torch.randn(args.batch, args.dim, generator=generator).to(device)
+            before = checksum(model)
+            # The top of the iteration, for Ravex: a round due since the last
+            # step closes here, before the forward runs.
+            out = model(x)
             now = checksum(model)
-            if last is not None and now != last:
+            if now != before:
                 print("RESULT " + json.dumps({
                     "case": "cluster", "event": "round", "host": host, "step": step, "checksum": now,
                 }), flush=True)
-            generator = torch.Generator().manual_seed(salt + step)
-            x = torch.randn(args.batch, args.dim, generator=generator).to(device)
-            loss = F.mse_loss(model(x), x.roll(1, dims=-1))
+            loss = F.mse_loss(out, x.roll(1, dims=-1))
             loss.backward()
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
-            last = checksum(model)
             ravex.log_metrics({"train/loss": loss})
             done = ravex.step()
             if done % args.report_every == 0:

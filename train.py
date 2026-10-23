@@ -142,7 +142,6 @@ def main() -> None:
 
         last = time.monotonic()
         while ravex.step() < args.steps:
-            ravex.batch_boundary()
             step = ravex.step()
             model.train()
             generator = torch.Generator().manual_seed(args.seed + step)

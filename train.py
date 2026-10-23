@@ -124,7 +124,6 @@ def main() -> None:
             lr=args.lr, betas=(0.9, 0.95), eps=1e-8, fused=cuda,
         )
         schedule = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda s: lr_at(s) / args.lr)
-        ravex.track(model=model, optimizer=optimizer, scheduler=schedule)
         if args.compile:
             compile_static_parts(model)
         forward = model

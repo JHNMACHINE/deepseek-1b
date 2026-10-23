@@ -68,7 +68,6 @@ def main() -> None:
         torch.manual_seed(0)
         model = Toy(args.dim, args.layers).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-        ravex.track(model=model, optimizer=optimizer)
         print("RESULT " + json.dumps({
             "case": "cluster", "event": "start", "host": host, "device": device,
             "resumed_at": ravex.step(), "torch": torch.__version__,

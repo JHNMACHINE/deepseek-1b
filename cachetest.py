@@ -15,12 +15,15 @@ one ``CHECK`` line per thing it tried and a ``VERDICT`` at the end:
 * a signed put takes no more bytes than it was signed for (GPU-218);
 * the run's own keys (``RAVEX_S3_*``, R2's temporary ones for the workspace's
   bucket, GPU-217) list that bucket and are refused by ``gpuzero-cache``;
-* ``ravex cache push`` and ``pull`` reach the cache through ``sign+https://``,
-  and a push to ``global`` fails.
+* smith's ``cache.py push`` and ``pull`` reach the cache through
+  ``sign+https://``, and a push to ``global`` fails. It was ``ravex cache``
+  until the cache moved to smith (GPU-267); a node has it beside smith, at
+  ``/app/smith/cache.py`` in smith's image (``SMITH_CACHE_PY`` elsewhere).
 
 It uses ``RAVEX_METRICS_TOKEN``, which is the agent's token and so the same
-one smith gives ``ravex cache``. At the end it compiles a small model, so the
-push smith makes after the job has Inductor and Triton kernels to send.
+one smith gives ``cache.py``, as ``SMITH_CACHE_TOKEN``. At the end it compiles
+a small model, so the push smith makes after the job has Inductor and Triton
+kernels to send.
 """
 
 from __future__ import annotations
@@ -185,26 +188,33 @@ def run_keys() -> None:
     check("the run's keys do not open gpuzero-cache", status in (401, 403), str(status))
 
 
-def ravex_cache() -> None:
+#: Where smith's cache.py is on a node started from smith's GPU image.
+SMITH_CACHE_PY = os.environ.get("SMITH_CACHE_PY") or "/app/smith/cache.py"
+
+
+def smith_cache() -> None:
+    if not os.path.isfile(SMITH_CACHE_PY):
+        check("smith's cache.py is on this node", False, SMITH_CACHE_PY + " does not exist")
+        return
     signed = "sign+" + os.environ["RAVEX_METRICS_ENDPOINT"].rstrip("/") + "/api/cache/"
-    env = dict(os.environ, RAVEX_CACHE_TOKEN=os.environ["RAVEX_METRICS_TOKEN"])
+    env = dict(os.environ, SMITH_CACHE_TOKEN=os.environ["RAVEX_METRICS_TOKEN"])
     name = "probe-" + uuid.uuid4().hex[:8]
     with tempfile.TemporaryDirectory() as there, tempfile.TemporaryDirectory() as back:
         with open(os.path.join(there, "kernel.bin"), "wb") as handle:
             handle.write(os.urandom(2048))
 
         def cli(action: str, directory: str, scope: str) -> subprocess.CompletedProcess:
-            done = subprocess.run([sys.executable, "-m", "ravex._cli", "cache", action, "--name", name,
+            done = subprocess.run([sys.executable, SMITH_CACHE_PY, action, "--name", name,
                                    "--dir", directory, "--store", signed + scope],
                                   env=env, capture_output=True, text=True)
-            print("ravex cache %s %s -> %d\n%s%s" % (action, scope, done.returncode, done.stdout, done.stderr), flush=True)
+            print("cache.py %s %s -> %d\n%s%s" % (action, scope, done.returncode, done.stdout, done.stderr), flush=True)
             return done
 
-        check("ravex cache push to workspace", cli("push", there, "workspace").returncode == 0)
+        check("cache.py push to workspace", cli("push", there, "workspace").returncode == 0)
         cli("pull", back, "workspace")
-        check("ravex cache pull from workspace brings the file back",
+        check("cache.py pull from workspace brings the file back",
               os.path.isfile(os.path.join(back, "kernel.bin")))
-        check("ravex cache push to global fails", cli("push", there, "global").returncode != 0)
+        check("cache.py push to global fails", cli("push", there, "global").returncode != 0)
 
 
 def compile_something() -> None:
@@ -228,7 +238,7 @@ def main() -> None:
     environment()
     route()
     run_keys()
-    ravex_cache()
+    smith_cache()
     compile_something()
     print("VERDICT %s%s" % ("FAIL - " if FAILED else "ok", ", ".join(FAILED)), flush=True)
     sys.exit(1 if FAILED else 0)
